@@ -374,3 +374,4 @@ The current tenant is set on each connection via a NestJS interceptor → DB ses
 - https://apps.apple.com/app/flexeo-drive/id6572284075 (available only in new zealand and australia)
 ### Personal
 - https://www.jpmadrigal.dev/
+- https://github.com/jpmadrigal07
