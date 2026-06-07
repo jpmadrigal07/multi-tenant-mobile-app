@@ -355,7 +355,22 @@ The current tenant is set on each connection via a NestJS interceptor → DB ses
 
 ---
 
-## Trade-offs I'd Flag to Lukas
+## Trade-offs
 
 - **Row-level security adds operational complexity.** For an MVP we could skip RLS and rely on app-layer filtering only — but I'd add it before serious customer data lands.
 - **The deep link → setActive flow needs careful UX** — if a user has multiple orgs and lands on a deep link for a different one than their current active, we need to confirm or auto-switch. I'd make this product-driven.
+
+---
+
+## My Portfolio
+
+### Web Apps
+- https://www.couriersandfreight.com.au/
+- https://cavalry.software/
+- https://www.dentistly.app/
+### Mobile Apps
+- https://apps.apple.com/ph/app/etchr-mirror/id1431621081
+- https://play.google.com/store/apps/details?id=com.indraw.etchr&hl=en
+- https://apps.apple.com/app/flexeo-drive/id6572284075 (available only in new zealand and australia)
+### Personal
+- https://www.jpmadrigal.dev/
