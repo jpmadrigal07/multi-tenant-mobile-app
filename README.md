@@ -1,4 +1,4 @@
-# Multi-Tenant Mobile App — Architecture Answer
+# Got it! Multi-Tenant Mobile App — Architecture Answer
 
 > **Note:** This architecture is based only on the information available in the job posting. Some decisions will likely change once I'm hired and have full context — actual user flows, business constraints, existing tech preferences, scale targets, and edge cases that aren't visible from the outside. Treat this as a starting point for discussion, not a final blueprint.
 
