@@ -3,7 +3,6 @@
 > **Note:** This architecture is based only on the information available in the job posting. Some decisions will likely change once I'm hired and have full context — actual user flows, business constraints, existing tech preferences, scale targets, and edge cases that aren't visible from the outside. Treat this as a starting point for discussion, not a final blueprint.
 
 ## The Question
-
 **How would you technically handle the multi-tenant mobile app branding switch?**
 
 ---
@@ -49,13 +48,14 @@ flowchart TD
 
 ### 1. Backend Framework — NestJS
 
-For the backend, I'd use **NestJS** rather than plain Express or Fastify. This is a deliberate choice for an MVP with a solo developer + AI tooling:
+For the backend, I'd use **NestJS** rather than plain Express or Fastify. The reasoning, in order of importance:
 
-- **Highly opinionated structure** — modules, controllers, services, providers. There's exactly one right way to do each thing, which means less decision fatigue and a codebase that stays clean as it grows.
+- **Maintainability** — opinionated module/controller/service structure means the codebase stays clean as it grows. There's exactly one right way to do each thing, which matters when an MVP unexpectedly becomes the production system.
+- **Testability** — built-in dependency injection makes services trivially mockable. Once real customers are using it and you can't ship broken code, this pays for itself.
+- **Team scalability** — when the next hire joins, the structure is self-documenting. No tribal knowledge about "how we organize routes here."
 - **TypeScript-first with decorators** — `@Controller()`, `@Injectable()`, `@UseGuards()`. Patterns are explicit and visible, not buried in middleware chains.
-- **Dependency injection is built in** — services are trivially testable and mockable. Important when an MVP starts attracting real customers and you can't break things.
-- **CLI scaffolds modules** — `nest g module billing` generates the entire folder structure with sensible defaults. Less time on boilerplate, more time on product.
-- **Why this is AI-friendly:** Every NestJS codebase looks structurally identical — modules contain controllers + services + DTOs, decorators announce intent, file naming is enforced. AI assistants (Claude Code, Cursor, Copilot) excel at this kind of predictable pattern. When you ask AI to "add an endpoint for cancelling subscriptions," it knows exactly which file to create, which decorators to use, and which service to inject. With Express/Fastify, the same request produces wildly different code depending on the codebase's conventions. NestJS removes that ambiguity, which means AI-assisted shipping is materially faster and produces more consistent code.
+- **CLI scaffolding** — `nest g module billing` generates the folder structure with sensible defaults.
+- **Bonus: AI tooling works well with it** — because the structure is so predictable, tools like Claude Code or Cursor produce consistent output. With Express/Fastify, the same request produces wildly different code depending on the codebase's conventions. Real velocity win for a solo MVP build, though not the primary reason to pick the framework.
 
 ```typescript
 // Example: a clean NestJS module structure
@@ -106,6 +106,8 @@ export const auth = betterAuth({
 ```
 
 Better Auth handles JWT signing, refresh rotation, PKCE for mobile, session management, and the JWKS endpoint — all things that are easy to get subtly wrong and expensive to debug. For an MVP where we need to move fast without compromising security, this is exactly the right level of abstraction.
+
+Worth noting: Better Auth is newer than alternatives like Clerk, Auth0, or Firebase Auth. I think it's the right pick here because the organization plugin maps cleanly to our multi-tenant model and there's no vendor lock-in — but it's a deliberate bet on a younger library. Happy to discuss if you'd prefer something more mature.
 
 I'd wire it into NestJS via a `@UseGuards(BetterAuthGuard)` decorator on protected routes, with the guard extracting the session and attaching `activeOrganizationId` to the request context.
 
@@ -160,20 +162,17 @@ export class TenantConfigService {
 }
 ```
 
-Returns a single config object — one round trip:
+Returns a single config object — one round trip. Branding + feature flags only; the actual catalog has its own paginated endpoint (covered in section 7) to keep this response small and cacheable:
 
 ```json
 {
   "organizationId": "acme-corp",
+  "updatedAt": "2026-06-01T12:00:00Z",
   "branding": {
     "primaryColor": "#FF6B35",
     "secondaryColor": "#004E89",
     "logoUrl": "https://cdn.example.com/acme/logo.png",
     "fontFamily": "Poppins"
-  },
-  "catalog": {
-    "paginationLimit": 20,
-    "categories": ["memberships", "classes", "products"]
   },
   "features": {
     "stripeConnect": true,
@@ -182,7 +181,11 @@ Returns a single config object — one round trip:
 }
 ```
 
+The `updatedAt` field doubles as a cache version — the client compares it against its cached value and only re-renders if newer. Combined with HTTP ETag headers, this makes background refreshes essentially free when nothing has changed.
+
 The `@CurrentOrg()` custom decorator extracts `activeOrganizationId` from the request, set there by the `BetterAuthGuard`. This pattern keeps controllers clean and intent obvious.
+
+**Server-side validation matters:** before persisting any tenant config update from the dashboard, the backend validates branding values — contrast ratios meet WCAG AA, hex colors are well-formed, logo URLs resolve to images of expected dimensions. A business owner uploading `primaryColor: "#FFFFFF"` on a white background would otherwise break the entire app for their customers.
 
 ---
 
@@ -245,7 +248,8 @@ Product catalogs can have hundreds of items. Instead of loading everything at on
 ```typescript
 const { data, fetchNextPage } = useInfiniteQuery({
   queryKey: ['catalog', tenantId],
-  queryFn: ({ pageParam = 1 }) => fetchCatalog(tenantId, pageParam),
+  queryFn: ({ pageParam = 1 }) =>
+    fetchCatalog(tenantId, pageParam),
   getNextPageParam: (lastPage) => lastPage.nextPage,
 });
 ```
@@ -332,24 +336,26 @@ USING (organization_id = current_setting('app.current_tenant')::uuid);
 
 The current tenant is set on each connection via a NestJS interceptor → DB session variable. Defense in depth.
 
+**One operational gotcha with RLS + connection pooling:** the `app.current_tenant` session variable persists on the connection after the request finishes. If the next request checks out the same connection and forgets to set it, it can leak the previous tenant's data. The fix is to always set the variable at the start of each request *and* reset it on release (via a Prisma middleware or NestJS interceptor's `finally` block). This is the kind of subtle bug that doesn't show up in testing — easy to verify with a load test that mixes tenant requests across the pool.
+
 ---
 
 ## Why This Scales
 
-| Concern                         | Solution                                                                  |
-| ------------------------------- | ------------------------------------------------------------------------- |
-| Adding a new tenant             | Insert a row in `organization` — no code changes                          |
-| Tenant updates branding         | Dashboard writes to `tenant_config` → next background refresh picks it up |
-| 1,000 tenants                   | Same codebase, same app binary — context handles the rest                 |
-| Offline support                 | Cached branding in AsyncStorage keeps app functional without network      |
-| Performance                     | React Query deduplicates requests, lazy loads catalog                     |
-| Security                        | Better Auth + PostgreSQL RLS = belt and suspenders                        |
-| Onboarding new staff per tenant | Better Auth's built-in invitation flow with email                         |
-| Adding new features             | NestJS module pattern — `nest g module` and you're scaffolded             |
+| Concern | Solution |
+|---|---|
+| Adding a new tenant | Insert a row in `organization` — no code changes |
+| Tenant updates branding | Dashboard writes to `tenant_config` → next background refresh picks it up |
+| 1,000 tenants | Same codebase, same app binary — context handles the rest |
+| Offline support | Cached branding renders the app instantly on launch; full offline functionality (checkout, etc.) requires explicit per-flow handling |
+| Performance | React Query deduplicates requests, lazy loads catalog |
+| Security | Better Auth + PostgreSQL RLS = belt and suspenders |
+| Onboarding new staff per tenant | Better Auth's built-in invitation flow with email |
+| Adding new features | NestJS module pattern — `nest g module` and you're scaffolded |
 
 ---
 
-## Trade-offs
+## Trade-offs I'd Flag to Lukas
 
 - **Row-level security adds operational complexity.** For an MVP we could skip RLS and rely on app-layer filtering only — but I'd add it before serious customer data lands.
 - **The deep link → setActive flow needs careful UX** — if a user has multiple orgs and lands on a deep link for a different one than their current active, we need to confirm or auto-switch. I'd make this product-driven.
